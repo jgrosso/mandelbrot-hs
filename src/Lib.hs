@@ -6,30 +6,27 @@ module Lib
   ( plot
   ) where
 
-import Control.Arrow (second)
-import Control.Monad.State (execState, get, gets, modify, put)
+import Codec.Picture
+  ( DynamicImage(ImageRGB8)
+  , PixelRGB8(PixelRGB8)
+  , generateImage
+  , savePngImage
+  )
 
-import Data.Colour.SRGB (sRGB24read)
+import Control.Arrow (second)
+import Control.Monad.ST (runST)
+
+import Data.Colour.SRGB (RGB(RGB), sRGB24read, toSRGB24)
 import Data.Foldable (foldl')
 import Data.Function ((&))
+import Data.STRef (modifySTRef, newSTRef, readSTRef)
 import Data.Semigroup (Any, (<>))
 
-import Debug.Trace (traceId)
-
-import Diagrams.Attributes as Svg (lineWidth, none)
-import Diagrams.Backend.SVG (SVG, renderSVG)
-import Diagrams.Core.Types as Svg (QDiagram)
-import Diagrams.Size as Svg (mkSizeSpec)
-import Diagrams.TwoD.Attributes as Svg (fillTexture, solid)
-import Diagrams.TwoD.Combinators as Svg (hcat, vcat)
-import Diagrams.TwoD.Shapes as Svg (square)
-import Diagrams.TwoD.Types as Svg (V2(V2))
+import Debug.Trace (trace)
 
 import Numeric (showHex)
 
 import Text.Printf (printf)
-
-type SvgDiagram = Svg.QDiagram SVG Svg.V2 Double Any
 
 newtype Coordinate =
   Coordinate (Double, Double)
@@ -38,10 +35,10 @@ newtype Pixel =
   Pixel (Double, Double)
 
 screenHeight :: Int
-screenHeight = 1024
+screenHeight = 8094
 
 screenWidth :: Int
-screenWidth = 1024
+screenWidth = 8094
 
 screenPixels :: [Pixel]
 screenPixels =
@@ -56,7 +53,7 @@ instance Show Color where
   show (Color color) = "#" <> (printf "%06s" $ showHex color "")
 
 maxIterations :: Int
-maxIterations = 10000
+maxIterations = 5000
 
 iterationToColor :: Int -> Color
 iterationToColor =
@@ -66,7 +63,7 @@ iterationToColor =
   fromIntegral . (`mod` paletteSize)
   where
     paletteSize :: Int
-    paletteSize = maxIterations `div` 80
+    paletteSize = maxIterations `div` 40
 
 dup :: a -> (a, a)
 dup x = (x, x)
@@ -76,15 +73,14 @@ data Interval = Interval
   , upperBound :: Double
   }
 
-mandelbrot :: [[Pixel]]
+mandelbrot :: [[PixelRGB8]]
 mandelbrot =
   map
     (\row ->
        map
          (\column ->
             let pixel = Pixel (fromIntegral row, fromIntegral column)
-                color = plotPixel pixel
-            in colorToSvgRect color)
+            in colorToRGB8 $ plotPixel pixel)
          [0 .. screenWidth])
     [0 .. screenHeight]
 
@@ -94,11 +90,10 @@ plot = savePngImage "output.png" image
     image = ImageRGB8 $ generateImage generatePixel screenWidth screenHeight
     generatePixel x y = mandelbrot !! x !! y
 
-colorToSvgRect color =
-  let rgbColor = sRGB24read $ show color
-      pointWidth = 1
-  in Svg.square pointWidth & Svg.lineWidth Svg.none &
-     Svg.fillTexture (Svg.solid rgbColor)
+colorToRGB8 :: Color -> PixelRGB8
+colorToRGB8 =
+  (\(RGB red green blue) -> PixelRGB8 red green blue) .
+  toSRGB24 . sRGB24read . show
 
 scale :: Interval -> Interval -> Double -> Double
 scale input output x =
@@ -113,14 +108,20 @@ plotPixel pixel@(Pixel (pixelX, pixelY)) =
         scale (Interval 0 (fromIntegral screenWidth)) (Interval (-2.5) 1) pixelX
       y0 =
         scale (Interval 0 (fromIntegral screenWidth)) (Interval (-1) 1) pixelY
-      (_, iteration) =
-        flip execState ((x0, y0), 0) $
-        whileM
-          (gets $ \((x, y), iteration) ->
-             (x * x) + (y * y) < 4 && iteration < maxIterations) $ do
-          tempX <- gets $ \((x, y), _) -> (x * x) - (y * y) + x0
-          modify $ \((x, y), iteration) ->
-            ((tempX, (2 * x * y) + y0), iteration + 1)
+      iteration =
+        runST $ do
+          coordRef <- newSTRef $ Coordinate (x0, y0)
+          numIterationRef <- newSTRef 0
+          whileM
+            (do Coordinate (x, y) <- readSTRef coordRef
+                numIteration <- readSTRef numIterationRef
+                pure $ (x * x) + (y * y) < 4 && numIteration < maxIterations) $ do
+            Coordinate (x, y) <- readSTRef coordRef
+            let tempX = (x * x) - (y * y) + x0
+            modifySTRef coordRef $
+              (\(Coordinate (x, y)) -> Coordinate (tempX, (2 * x * y) + y0))
+            modifySTRef numIterationRef succ
+          readSTRef numIterationRef
   in iterationToColor iteration
 
 whileM :: (Monad m) => m Bool -> m () -> m ()
