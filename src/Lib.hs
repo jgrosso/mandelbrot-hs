@@ -1,5 +1,9 @@
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module Lib
@@ -14,6 +18,9 @@ import Codec.Picture
   )
 
 import Control.Arrow (second)
+import Control.DeepSeq (NFData(rnf), force)
+import Control.DeepSeq.Generics (genericRnf)
+import Control.Exception (evaluate)
 import Control.Monad.ST (runST)
 
 import Data.Colour.SRGB (RGB(RGB), sRGB24read, toSRGB24)
@@ -24,15 +31,22 @@ import Data.Semigroup (Any, (<>))
 
 import Debug.Trace (trace)
 
+import GHC.Generics (Generic)
+
 import Numeric (showHex)
 
 import Text.Printf (printf)
 
-newtype Coordinate =
-  Coordinate (Double, Double)
+deriving instance Generic PixelRGB8
 
-newtype Pixel =
-  Pixel (Double, Double)
+instance NFData PixelRGB8 where
+  rnf = genericRnf
+
+data Coordinate =
+  Coordinate !(Double, Double)
+
+data Pixel =
+  Pixel !(Double, Double)
 
 screenHeight :: Int
 screenHeight = 8094
@@ -45,8 +59,8 @@ screenPixels =
   curry Pixel <$> [0 .. fromIntegral screenWidth] <*>
   [0 .. fromIntegral screenHeight]
 
-newtype Color =
-  Color Int
+data Color =
+  Color !Int
 
 instance Show Color where
   show :: Color -> String
@@ -63,7 +77,7 @@ iterationToColor =
   fromIntegral . (`mod` paletteSize)
   where
     paletteSize :: Int
-    paletteSize = maxIterations `div` 40
+    paletteSize = maxIterations `div` 80
 
 dup :: a -> (a, a)
 dup x = (x, x)
@@ -79,16 +93,18 @@ mandelbrot =
     (\row ->
        map
          (\column ->
-            let pixel = Pixel (fromIntegral row, fromIntegral column)
+            let pixel = Pixel (row, column)
             in colorToRGB8 $ plotPixel pixel)
-         [0 .. screenWidth])
-    [0 .. screenHeight]
+         [0 .. fromIntegral screenWidth])
+    [0 .. fromIntegral screenHeight]
 
 plot :: IO ()
-plot = savePngImage "output.png" image
-  where
-    image = ImageRGB8 $ generateImage generatePixel screenWidth screenHeight
-    generatePixel x y = mandelbrot !! x !! y
+plot = do
+  mandelbrot' <- evaluate $ force mandelbrot
+  putStrLn "Mandelbrot evaluated!"
+  let generatePixel x y = mandelbrot' !! x !! y
+  let image = ImageRGB8 $ generateImage generatePixel screenWidth screenHeight
+  savePngImage "output.png" image
 
 colorToRGB8 :: Color -> PixelRGB8
 colorToRGB8 =

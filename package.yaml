@@ -1,4 +1,4 @@
-aame:                mandelbrot
+name:                mandelbrot
 version:             0.1.0.0
 github:              "githubuser/mandelbrot"
 license:             BSD3
@@ -22,6 +22,8 @@ description:         Please see the README on GitHub at <https://github.com/gith
 dependencies:
 - base >= 4.7 && < 5
 - colour
+- deepseq
+- deepseq-generics
 - JuicyPixels
 - mtl
 
